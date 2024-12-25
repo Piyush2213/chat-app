@@ -1,0 +1,58 @@
+version: '3'
+
+services:
+  mongo_db:
+    image: mongo:5.0.2
+    env_file: ./.env
+    restart: unless-stopped
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=$MONGODB_USER
+      - MONGO_INITDB_ROOT_PASSWORD=$MONGODB_PASSWORD
+    ports:
+      - $MONGODB_LOCAL_PORT:$MONGODB_DOCKER_PORT
+    volumes:
+      - db:/data/db
+    networks:
+      - docker-chat-network
+
+  chat-frontend:
+    container_name: chat-frontend
+    build: ../front-chat
+    depends_on:
+      - backend
+    ports:
+      - 5173:5173
+    stdin_open: true
+    environment:
+      CHOKIDAR_USEPOLLING: "true"
+    command: npm run dev
+    networks:
+      - docker-chat-network
+    volumes:
+      - './:/app'
+      - '/app/node_modules'
+
+
+  backend:
+    container_name: chat-backend
+    build: .
+    depends_on:
+      - mongo_db
+    restart: on-failure
+    ports:
+      - $SPRING_LOCAL_PORT:$SPRING_DOCKER_PORT
+    environment:
+      SPRING_APPLICATION_JSON: '{
+              "spring.data.mongodb.uri" : "mongodb://$MONGODB_USER:$MONGODB_PASSWORD@mongo_db:$MONGODB_DOCKER_PORT/$MONGODB_DATABASE?authSource=admin"
+            }'
+    networks:
+      - docker-chat-network
+    stdin_open: true
+    tty: true
+
+networks:
+  docker-chat-network:
+    driver: bridge
+
+volumes:
+  db:
