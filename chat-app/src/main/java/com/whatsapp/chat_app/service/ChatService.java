@@ -29,6 +29,10 @@ public class ChatService {
         message.setSender(request.getSender());
         message.setContent(request.getContent());
         message.setTimeStamp(request.getTimeStamp());
+        message.setMessageType(request.getMessageType() != null ? request.getMessageType() : "TEXT");
+        message.setFileUrl(request.getFileUrl());
+        message.setFileName(request.getFileName());
+        message.setFileType(request.getFileType());
 
         // Add the message to the room's message list
         room.getMessages().add(message);
@@ -42,6 +46,10 @@ public class ChatService {
         messageResponse.setContent(message.getContent());
         messageResponse.setTimeStamp(message.getTimeStamp());
         messageResponse.setRoomId(roomId);
+        messageResponse.setMessageType(message.getMessageType());
+        messageResponse.setFileUrl(message.getFileUrl());
+        messageResponse.setFileName(message.getFileName());
+        messageResponse.setFileType(message.getFileType());
 
         return messageResponse;
     }

@@ -16,9 +16,17 @@ public class Message {
     private String content;
     private LocalDateTime timeStamp;
 
-    public Message(String sender, String content){
+    // New fields for file/image sharing.
+    // messageType is "TEXT" (default), "IMAGE", or "FILE".
+    private String messageType;
+    private String fileUrl;
+    private String fileName;
+    private String fileType;
+
+    public Message(String sender, String content) {
         this.content = content;
         this.sender = sender;
         this.timeStamp = LocalDateTime.now();
+        this.messageType = "TEXT";
     }
 }

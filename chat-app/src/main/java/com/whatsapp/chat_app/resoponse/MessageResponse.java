@@ -4,6 +4,7 @@ import lombok.Getter;
 import lombok.Setter;
 
 import java.time.LocalDateTime;
+
 @Getter
 @Setter
 public class MessageResponse {
@@ -11,4 +12,10 @@ public class MessageResponse {
     private String content;
     private String roomId;
     private LocalDateTime timeStamp;
+
+    // New fields for file/image sharing.
+    private String messageType;
+    private String fileUrl;
+    private String fileName;
+    private String fileType;
 }

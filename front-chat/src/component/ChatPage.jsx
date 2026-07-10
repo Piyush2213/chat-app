@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import MdAttachFile from '@mui/icons-material/AttachFile';
 import MdSend from '@mui/icons-material/Send';
+import MdInsertDriveFile from '@mui/icons-material/InsertDriveFile';
+import MdClose from '@mui/icons-material/Close';
 import useChatContext from '../context/ChatContext';
 import { useNavigate } from 'react-router-dom';
 import SockJS from 'sockjs-client';
@@ -8,6 +10,7 @@ import { baseURL } from '../config/AxiosHelper';
 import toast from 'react-hot-toast';
 import { Stomp } from '@stomp/stompjs';
 import { getMessageApi } from '../services/RoomService';
+import { uploadFileApi } from '../services/FileService';
 import { timeAgo } from '../config/Helper';
 
 // Deterministic accent color per username, so the same person always
@@ -53,6 +56,52 @@ function Avatar({ name, size = 40 }) {
     );
 }
 
+function formatFileSize(bytes) {
+    if (!bytes && bytes !== 0) return '';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// Renders the body of a single message: plain text, an inline image,
+// or a document card with a download link.
+function MessageBody({ message, isOwn }) {
+    const fileUrl = message.fileUrl ? `${baseURL}${message.fileUrl}` : null;
+
+    if (message.messageType === 'IMAGE' && fileUrl) {
+        return (
+            <a href={fileUrl} target="_blank" rel="noopener noreferrer" className="block">
+                <img
+                    src={fileUrl}
+                    alt={message.fileName || 'image'}
+                    className="rounded-lg max-w-full max-h-64 object-cover"
+                />
+            </a>
+        );
+    }
+
+    if (message.messageType === 'FILE' && fileUrl) {
+        return (
+            <a
+                href={fileUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg ${
+                    isOwn ? 'bg-white/10' : 'bg-black/20'
+                }`}
+            >
+                <MdInsertDriveFile fontSize="small" />
+                <div className="min-w-0">
+                    <p className="text-sm truncate max-w-[180px]">{message.fileName || 'Document'}</p>
+                    <p className="text-[11px] opacity-70">Tap to download</p>
+                </div>
+            </a>
+        );
+    }
+
+    return <span>{message.content}</span>;
+}
+
 function ChatPage() {
     const { roomId, currentUser, connected, setConnected, setRoomId, setCurrentUser } = useChatContext();
     const navigate = useNavigate();
@@ -67,9 +116,17 @@ function ChatPage() {
     const [input, setInput] = useState("");
     const chatBoxRef = useRef(null);
     const inputRef = useRef(null);
+    const fileInputRef = useRef(null);
     const [stompClient, setStompClient] = useState(null);
     const [isSending, setIsSending] = useState(false);
     const [isConnecting, setIsConnecting] = useState(true);
+
+    // Attachment staged for sending, before it's uploaded.
+    const [pendingFile, setPendingFile] = useState(null); // File object
+    const [pendingPreviewUrl, setPendingPreviewUrl] = useState(null); // local object URL for image preview
+    const [isUploading, setIsUploading] = useState(false);
+
+    const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // keep in sync with backend limit
 
     // Load messages when component mounts or roomId changes
     useEffect(() => {
@@ -118,23 +175,87 @@ function ChatPage() {
         }
     }, [roomId]);
 
+    // Revoke the local preview object URL when it's replaced or the component unmounts,
+    // so we don't leak memory.
+    useEffect(() => {
+        return () => {
+            if (pendingPreviewUrl) URL.revokeObjectURL(pendingPreviewUrl);
+        };
+    }, [pendingPreviewUrl]);
+
+    function handleAttachClick() {
+        fileInputRef.current?.click();
+    }
+
+    function handleFileChosen(e) {
+        const file = e.target.files?.[0];
+        // Reset the input value so choosing the same file again still fires onChange.
+        e.target.value = '';
+
+        if (!file) return;
+
+        if (file.size > MAX_FILE_SIZE_BYTES) {
+            toast.error("File is too large. Max size is 10MB.");
+            return;
+        }
+
+        if (pendingPreviewUrl) URL.revokeObjectURL(pendingPreviewUrl);
+
+        setPendingFile(file);
+        setPendingPreviewUrl(file.type.startsWith('image/') ? URL.createObjectURL(file) : null);
+    }
+
+    function clearPendingFile() {
+        if (pendingPreviewUrl) URL.revokeObjectURL(pendingPreviewUrl);
+        setPendingFile(null);
+        setPendingPreviewUrl(null);
+    }
+
     const sendMessage = async () => {
-        if (stompClient && connected && input.trim() && !isSending) {
-            setIsSending(true);
-            const message = {
-                sender: currentUser,
-                content: input,
-                roomId: roomId,
-            };
-            try {
+        if (!stompClient || !connected || isSending || isUploading) return;
+        if (!input.trim() && !pendingFile) return;
+
+        setIsSending(true);
+        try {
+            if (pendingFile) {
+                setIsUploading(true);
+                let uploadResult;
+                try {
+                    uploadResult = await uploadFileApi(pendingFile);
+                } catch (error) {
+                    toast.error("Failed to upload file");
+                    return;
+                } finally {
+                    setIsUploading(false);
+                }
+
+                const isImage = pendingFile.type.startsWith('image/');
+                const fileMessage = {
+                    sender: currentUser,
+                    content: input.trim() || (isImage ? 'Sent a photo' : 'Sent a document'),
+                    roomId: roomId,
+                    messageType: isImage ? 'IMAGE' : 'FILE',
+                    fileUrl: uploadResult.url,
+                    fileName: uploadResult.fileName,
+                    fileType: uploadResult.fileType,
+                };
+                stompClient.send(`/app/sendMessage/${roomId}`, {}, JSON.stringify(fileMessage));
+                clearPendingFile();
+            } else {
+                const message = {
+                    sender: currentUser,
+                    content: input,
+                    roomId: roomId,
+                    messageType: 'TEXT',
+                };
                 stompClient.send(`/app/sendMessage/${roomId}`, {}, JSON.stringify(message));
-                setInput('');
-            } catch (error) {
-                toast.error("Failed to send message");
-            } finally {
-                setIsSending(false);
-                inputRef.current?.focus();
             }
+            setInput('');
+        } catch (error) {
+            toast.error("Failed to send message");
+        } finally {
+            setIsSending(false);
+            inputRef.current?.focus();
         }
     };
 
@@ -237,13 +358,13 @@ function ChatPage() {
                                     </span>
                                 )}
                                 <div
-                                    className={`px-4 py-2.5 text-sm leading-relaxed shadow-sm break-words ${
+                                    className={`px-3 py-2.5 text-sm leading-relaxed shadow-sm break-words ${
                                         isOwn
                                             ? 'bg-[#4C3AED] text-white rounded-2xl rounded-br-md'
                                             : 'bg-[#1F1F2B] text-[#E8E6F0] rounded-2xl rounded-bl-md border border-white/5'
-                                    }`}
+                                    } ${message.messageType === 'IMAGE' ? 'p-1.5' : ''}`}
                                 >
-                                    {message.content}
+                                    <MessageBody message={message} isOwn={isOwn} />
                                 </div>
                                 <span className="text-[10px] text-[#5F5D6E] mt-1 px-1">
                                     {timeAgo(message.timeStamp)}
@@ -256,35 +377,74 @@ function ChatPage() {
 
             {/* Message Input */}
             <div className="px-4 sm:px-8 py-4 bg-[#181822] border-t border-white/5">
-                <div className="max-w-3xl mx-auto flex items-center gap-3 bg-[#1F1F2B] border border-white/10 rounded-2xl px-3 py-2 focus-within:border-[#4C3AED]/60 transition-colors">
-                    <button
-                        type="button"
-                        className="text-[#8B899C] hover:text-[#E8E6F0] p-2 rounded-full hover:bg-white/5 transition-colors"
-                        aria-label="Attach file"
-                    >
-                        <MdAttachFile fontSize="small" />
-                    </button>
-                    <input
-                        ref={inputRef}
-                        type="text"
-                        placeholder="Message the room..."
-                        value={input}
-                        onChange={(e) => setInput(e.target.value)}
-                        onKeyDown={handleKeyDown}
-                        className="flex-1 bg-transparent text-sm text-[#E8E6F0] placeholder-[#5F5D6E] focus:outline-none py-1.5"
-                    />
-                    <button
-                        onClick={sendMessage}
-                        disabled={isSending || !input.trim()}
-                        aria-label="Send message"
-                        className={`p-2.5 rounded-full transition-colors duration-150 ${
-                            isSending || !input.trim()
-                                ? 'bg-white/5 text-[#5F5D6E] cursor-not-allowed'
-                                : 'bg-[#4C3AED] text-white hover:bg-[#5B4AF0]'
-                        }`}
-                    >
-                        <MdSend fontSize="small" />
-                    </button>
+                <div className="max-w-3xl mx-auto">
+                    {/* Staged attachment preview */}
+                    {pendingFile && (
+                        <div className="flex items-center gap-3 mb-2 px-3 py-2 bg-[#1F1F2B] border border-white/10 rounded-xl">
+                            {pendingPreviewUrl ? (
+                                <img src={pendingPreviewUrl} alt="preview" className="w-10 h-10 rounded-lg object-cover" />
+                            ) : (
+                                <div className="w-10 h-10 rounded-lg bg-white/5 flex items-center justify-center">
+                                    <MdInsertDriveFile fontSize="small" className="text-[#8B899C]" />
+                                </div>
+                            )}
+                            <div className="min-w-0 flex-1">
+                                <p className="text-sm truncate">{pendingFile.name}</p>
+                                <p className="text-[11px] text-[#8B899C]">{formatFileSize(pendingFile.size)}</p>
+                            </div>
+                            <button
+                                onClick={clearPendingFile}
+                                className="p-1.5 rounded-full hover:bg-white/10 text-[#8B899C] hover:text-[#E8E6F0]"
+                                aria-label="Remove attachment"
+                            >
+                                <MdClose fontSize="small" />
+                            </button>
+                        </div>
+                    )}
+
+                    <div className="flex items-center gap-3 bg-[#1F1F2B] border border-white/10 rounded-2xl px-3 py-2 focus-within:border-[#4C3AED]/60 transition-colors">
+                        <input
+                            ref={fileInputRef}
+                            type="file"
+                            className="hidden"
+                            onChange={handleFileChosen}
+                            accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip"
+                        />
+                        <button
+                            type="button"
+                            onClick={handleAttachClick}
+                            disabled={isUploading}
+                            className="text-[#8B899C] hover:text-[#E8E6F0] p-2 rounded-full hover:bg-white/5 transition-colors disabled:opacity-50"
+                            aria-label="Attach file"
+                        >
+                            <MdAttachFile fontSize="small" />
+                        </button>
+                        <input
+                            ref={inputRef}
+                            type="text"
+                            placeholder={pendingFile ? "Add a caption (optional)..." : "Message the room..."}
+                            value={input}
+                            onChange={(e) => setInput(e.target.value)}
+                            onKeyDown={handleKeyDown}
+                            className="flex-1 bg-transparent text-sm text-[#E8E6F0] placeholder-[#5F5D6E] focus:outline-none py-1.5"
+                        />
+                        <button
+                            onClick={sendMessage}
+                            disabled={isSending || isUploading || (!input.trim() && !pendingFile)}
+                            aria-label="Send message"
+                            className={`p-2.5 rounded-full transition-colors duration-150 ${
+                                isSending || isUploading || (!input.trim() && !pendingFile)
+                                    ? 'bg-white/5 text-[#5F5D6E] cursor-not-allowed'
+                                    : 'bg-[#4C3AED] text-white hover:bg-[#5B4AF0]'
+                            }`}
+                        >
+                            {isUploading ? (
+                                <span className="block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                            ) : (
+                                <MdSend fontSize="small" />
+                            )}
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>

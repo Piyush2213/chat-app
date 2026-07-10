@@ -16,4 +16,11 @@ public class MessageRequest {
     private String content;
     private String roomId;
     private LocalDateTime timeStamp;
+
+    // New fields for file/image sharing.
+    // messageType is "TEXT" (default), "IMAGE", or "FILE".
+    private String messageType;
+    private String fileUrl;
+    private String fileName;
+    private String fileType;
 }
