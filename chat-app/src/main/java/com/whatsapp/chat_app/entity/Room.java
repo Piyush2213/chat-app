@@ -15,9 +15,18 @@ import java.util.List;
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
-
 public class Room {
     @Id
     private String roomId;
     private List<Message> messages = new ArrayList<>();
+
+    // The username of whoever created the room. Only this user can approve/deny joins.
+    private String createdBy;
+
+    // Usernames currently waiting for the owner to accept/deny them.
+    private List<String> pendingRequests = new ArrayList<>();
+
+    // Usernames already approved at least once, so they can rejoin without
+    // waiting for approval again.
+    private List<String> approvedUsers = new ArrayList<>();
 }

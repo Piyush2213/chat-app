@@ -5,9 +5,7 @@ import lombok.Setter;
 
 @Getter
 @Setter
-public class RoomRequest {
-    private String roomId;
-
-    // Username of whoever is creating the room. Becomes the room owner.
+public class JoinDecisionRequest {
     private String userName;
+    private boolean approved;
 }
