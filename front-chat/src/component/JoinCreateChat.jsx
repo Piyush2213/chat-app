@@ -6,10 +6,10 @@ import useChatContext from '../context/ChatContext';
 
 function JoinCreateChat() {
     const [detail, setDetail] = useState({
-        roomId:'',
-        userName:'',
+        roomId: '',
+        userName: '',
     });
-    const { roomId, currentUser, connected, setRoomId, setCurrentUser, setConnected } = useChatContext();
+    const { setRoomId, setCurrentUser, setConnected, setIsRoomOwner } = useChatContext();
     const navigate = useNavigate();
 
     // Validate the form inputs
@@ -33,12 +33,23 @@ function JoinCreateChat() {
     async function joinChat() {
         if (toValidateForm()) {
             try {
-                const room = await JoinChatApi(detail.roomId);
-                toast.success("Joined..!");
+                const room = await JoinChatApi(detail.roomId, detail.userName);
                 setCurrentUser(detail.userName);
                 setRoomId(room.roomId);
-                setConnected(true);
-                navigate("/chat");
+
+                if (room.status === "PENDING") {
+                    // Room owner needs to approve first.
+                    setIsRoomOwner(false);
+                    setConnected(false);
+                    toast("Waiting for the room owner to approve your request...");
+                    navigate("/waiting-approval");
+                } else {
+                    // "OWNER" or previously "APPROVED" -> straight in.
+                    setIsRoomOwner(room.status === "OWNER");
+                    setConnected(true);
+                    toast.success("Joined..!");
+                    navigate("/chat");
+                }
             } catch (error) {
                 if (error.status === 400) {
                     toast.error("Room no longer exists!");
@@ -57,6 +68,7 @@ function JoinCreateChat() {
                 toast.success("Room Created..!");
                 setCurrentUser(detail.userName);
                 setRoomId(response.roomId);
+                setIsRoomOwner(true);
                 setConnected(true);
                 navigate("/chat");
             } catch (error) {
@@ -77,13 +89,13 @@ function JoinCreateChat() {
                 {/* User Name Input */}
                 <div>
                     <label htmlFor="userName" className="block text-sm font-medium text-gray-700">Enter Your Name</label>
-                    <input 
+                    <input
                         onChange={handleFormInputChange}
                         value={detail.userName}
                         name="userName"
                         type="text"
                         placeholder="Enter your name..."
-                        className="w-full p-3 mt-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-teal-500 opacity-100 text-gray-900 dark:bg-gray-700 dark:text-white" // Ensure text is readable
+                        className="w-full p-3 mt-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-teal-500 opacity-100 text-gray-900 dark:bg-gray-700 dark:text-white"
                     />
                 </div>
 
@@ -96,19 +108,19 @@ function JoinCreateChat() {
                         name="roomId"
                         type="text"
                         placeholder="Enter room ID..."
-                        className="w-full p-3 mt-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-teal-500 opacity-100 text-gray-900 dark:bg-gray-700 dark:text-white" // Ensure text is readable
+                        className="w-full p-3 mt-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-teal-500 opacity-100 text-gray-900 dark:bg-gray-700 dark:text-white"
                     />
                 </div>
 
                 {/* Buttons */}
                 <div className="flex justify-center gap-5">
-                    <button 
+                    <button
                         onClick={joinChat}
                         className="px-6 py-3 w-full bg-teal-500 text-white rounded-lg hover:bg-teal-600 transition duration-200 focus:outline-none focus:ring-2 focus:ring-teal-400"
                     >
                         Join Room
                     </button>
-                    <button 
+                    <button
                         onClick={createRoom}
                         className="px-6 py-3 w-full bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition duration-200 focus:outline-none focus:ring-2 focus:ring-orange-400"
                     >

@@ -9,7 +9,7 @@ import SockJS from 'sockjs-client';
 import { baseURL } from '../config/AxiosHelper';
 import toast from 'react-hot-toast';
 import { Stomp } from '@stomp/stompjs';
-import { getMessageApi } from '../services/RoomService';
+import { getMessageApi, getPendingRequestsApi, decideJoinRequestApi } from '../services/RoomService';
 import { uploadFileApi } from '../services/FileService';
 import { timeAgo } from '../config/Helper';
 
@@ -103,7 +103,16 @@ function MessageBody({ message, isOwn }) {
 }
 
 function ChatPage() {
-    const { roomId, currentUser, connected, setConnected, setRoomId, setCurrentUser } = useChatContext();
+    const {
+        roomId,
+        currentUser,
+        connected,
+        setConnected,
+        setRoomId,
+        setCurrentUser,
+        isRoomOwner,
+        setIsRoomOwner,
+    } = useChatContext();
     const navigate = useNavigate();
 
     useEffect(() => {
@@ -126,6 +135,9 @@ function ChatPage() {
     const [pendingPreviewUrl, setPendingPreviewUrl] = useState(null); // local object URL for image preview
     const [isUploading, setIsUploading] = useState(false);
 
+    // Owner-only: usernames waiting to be let into the room.
+    const [pendingRequests, setPendingRequests] = useState([]);
+
     const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // keep in sync with backend limit
 
     // Load messages when component mounts or roomId changes
@@ -143,6 +155,23 @@ function ChatPage() {
             loadMessages();
         }
     }, [roomId]);
+
+    // Owner only: fetch anyone already waiting (e.g. requests that came in
+    // before the owner had this page open).
+    useEffect(() => {
+        async function loadPendingRequests() {
+            try {
+                const list = await getPendingRequestsApi(roomId);
+                setPendingRequests(list || []);
+            } catch (error) {
+                // Non-critical, skip silently.
+            }
+        }
+
+        if (connected && isRoomOwner) {
+            loadPendingRequests();
+        }
+    }, [roomId, isRoomOwner]);
 
     // Scroll to bottom when messages change
     useEffect(() => {
@@ -167,13 +196,24 @@ function ChatPage() {
                     const newMessage = JSON.parse(message.body);
                     setMessages((prev) => [...prev, newMessage]); // Add new message to the state
                 });
+
+                // Owner only: live notifications when someone new asks to join.
+                if (isRoomOwner) {
+                    client.subscribe(`/topic/room/${roomId}/joinRequests`, (message) => {
+                        const event = JSON.parse(message.body);
+                        setPendingRequests((prev) =>
+                            prev.includes(event.userName) ? prev : [...prev, event.userName]
+                        );
+                        toast(`${event.userName} wants to join the room`);
+                    });
+                }
             });
         };
 
         if (connected) {
             connectWebSocket();
         }
-    }, [roomId]);
+    }, [roomId, isRoomOwner]);
 
     // Revoke the local preview object URL when it's replaced or the component unmounts,
     // so we don't leak memory.
@@ -182,6 +222,16 @@ function ChatPage() {
             if (pendingPreviewUrl) URL.revokeObjectURL(pendingPreviewUrl);
         };
     }, [pendingPreviewUrl]);
+
+    async function respondToRequest(userName, approved) {
+        try {
+            await decideJoinRequestApi(roomId, userName, approved);
+            setPendingRequests((prev) => prev.filter((name) => name !== userName));
+            toast.success(approved ? `${userName} let in` : `${userName} denied`);
+        } catch (error) {
+            toast.error("Failed to send decision");
+        }
+    }
 
     function handleAttachClick() {
         fileInputRef.current?.click();
@@ -271,6 +321,7 @@ function ChatPage() {
         setConnected(false);
         setCurrentUser("");
         setRoomId("");
+        setIsRoomOwner(false);
         navigate('/');
     }
 
@@ -300,6 +351,11 @@ function ChatPage() {
                         />
                         {isConnecting ? 'Connecting' : 'Live'}
                     </span>
+                    {isRoomOwner && (
+                        <span className="ml-1 text-xs px-2 py-1 rounded-full bg-[#4C3AED]/15 text-[#8B7CFF]">
+                            Owner
+                        </span>
+                    )}
                 </div>
 
                 <div className="flex items-center gap-3">
@@ -315,6 +371,38 @@ function ChatPage() {
                     </button>
                 </div>
             </header>
+
+            {/* Owner-only: live join-request panel */}
+            {isRoomOwner && pendingRequests.length > 0 && (
+                <div className="absolute top-16 right-4 sm:right-8 z-20 w-72 bg-[#1F1F2B] border border-white/10 rounded-xl shadow-xl overflow-hidden">
+                    <div className="px-4 py-2.5 border-b border-white/5 flex items-center justify-between">
+                        <span className="text-sm font-medium">Join requests</span>
+                        <span className="text-xs px-1.5 py-0.5 rounded-full bg-[#4C3AED]/20 text-[#8B7CFF]">
+                            {pendingRequests.length}
+                        </span>
+                    </div>
+                    <div className="max-h-64 overflow-y-auto">
+                        {pendingRequests.map((name) => (
+                            <div key={name} className="flex items-center gap-3 px-4 py-2.5 border-b border-white/5 last:border-b-0">
+                                <Avatar name={name} size={28} />
+                                <span className="flex-1 text-sm truncate">{name}</span>
+                                <button
+                                    onClick={() => respondToRequest(name, true)}
+                                    className="text-xs px-2.5 py-1 rounded-md bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25"
+                                >
+                                    Accept
+                                </button>
+                                <button
+                                    onClick={() => respondToRequest(name, false)}
+                                    className="text-xs px-2.5 py-1 rounded-md bg-red-500/15 text-red-400 hover:bg-red-500/25"
+                                >
+                                    Deny
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
 
             {/* Chat Messages */}
             <main
