@@ -17,7 +17,6 @@ import java.util.UUID;
 @Setter
 @Getter
 public class Message {
-    // Stable id so read-receipts and reactions can target a specific message.
     private String id;
 
     private String sender;
@@ -29,11 +28,15 @@ public class Message {
     private String fileName;
     private String fileType;
 
-    // Usernames who have seen this message (sender is added automatically).
     private List<String> seenBy = new ArrayList<>();
-
-    // emoji -> usernames who reacted with it.
     private Map<String, List<String>> reactions = new HashMap<>();
+
+    // True once the author has edited the content at least once.
+    private boolean edited = false;
+
+    // Soft-delete: content/file fields get cleared, but the message stays
+    // in place (as a placeholder) so the conversation flow isn't disrupted.
+    private boolean deleted = false;
 
     public Message(String sender, String content) {
         this.id = UUID.randomUUID().toString();
@@ -43,5 +46,7 @@ public class Message {
         this.messageType = "TEXT";
         this.seenBy = new ArrayList<>();
         this.reactions = new HashMap<>();
+        this.edited = false;
+        this.deleted = false;
     }
 }

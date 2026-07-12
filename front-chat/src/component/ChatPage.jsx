@@ -3,27 +3,29 @@ import MdAttachFile from '@mui/icons-material/AttachFile';
 import MdSend from '@mui/icons-material/Send';
 import MdInsertDriveFile from '@mui/icons-material/InsertDriveFile';
 import MdClose from '@mui/icons-material/Close';
+import MdEdit from '@mui/icons-material/Edit';
+import MdDelete from '@mui/icons-material/Delete';
+import MdGroup from '@mui/icons-material/Group';
 import useChatContext from '../context/ChatContext';
 import { useNavigate } from 'react-router-dom';
 import SockJS from 'sockjs-client';
 import { baseURL } from '../config/AxiosHelper';
 import toast from 'react-hot-toast';
 import { Stomp } from '@stomp/stompjs';
-import { getMessageApi, getPendingRequestsApi, decideJoinRequestApi } from '../services/RoomService';
+import { getMessageApi, getPendingRequestsApi, decideJoinRequestApi, kickUserApi } from '../services/RoomService';
 import { uploadFileApi } from '../services/FileService';
 import { timeAgo } from '../config/Helper';
 
 const QUICK_EMOJIS = ['👍', '❤️', '😂'];
+const PAGE_SIZE = 50;
 
-// Deterministic accent color per username, so the same person always
-// gets the same avatar color across sessions.
 const AVATAR_PALETTE = [
-    { bg: '#4C3AED', fg: '#EDE9FE' }, // violet
-    { bg: '#0E9F8E', fg: '#E6FFFA' }, // teal
-    { bg: '#D9642C', fg: '#FFF1E6' }, // amber-clay
-    { bg: '#2563EB', fg: '#E8EEFF' }, // blue
-    { bg: '#C2417A', fg: '#FFE9F2' }, // rose
-    { bg: '#5B8A00', fg: '#F1FFDE' }, // olive
+    { bg: '#4C3AED', fg: '#EDE9FE' },
+    { bg: '#0E9F8E', fg: '#E6FFFA' },
+    { bg: '#D9642C', fg: '#FFF1E6' },
+    { bg: '#2563EB', fg: '#E8EEFF' },
+    { bg: '#C2417A', fg: '#FFE9F2' },
+    { bg: '#5B8A00', fg: '#F1FFDE' },
 ];
 
 function colorForName(name = '') {
@@ -45,12 +47,7 @@ function Avatar({ name, size = 40, online = false }) {
     return (
         <div className="relative shrink-0" style={{ width: size, height: size }}>
             <div
-                style={{
-                    width: size,
-                    height: size,
-                    backgroundColor: bg,
-                    color: fg,
-                }}
+                style={{ width: size, height: size, backgroundColor: bg, color: fg }}
                 className="rounded-full flex items-center justify-center font-semibold select-none"
             >
                 <span style={{ fontSize: size * 0.4 }}>{initialsForName(name)}</span>
@@ -73,11 +70,7 @@ function formatFileSize(bytes) {
 }
 
 function isSameDay(a, b) {
-    return (
-        a.getFullYear() === b.getFullYear() &&
-        a.getMonth() === b.getMonth() &&
-        a.getDate() === b.getDate()
-    );
+    return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
 function formatDateDivider(timeStamp) {
@@ -101,7 +94,6 @@ function DateDivider({ label }) {
     );
 }
 
-// Small "sent / seen" tick shown under the sender's own messages.
 function SeenTicks({ message, currentUser }) {
     if (message.sender !== currentUser) return null;
     const seenByOthers = (message.seenBy || []).filter((u) => u !== currentUser);
@@ -112,29 +104,46 @@ function SeenTicks({ message, currentUser }) {
     );
 }
 
-// Hover-to-react row of quick emoji buttons.
-function QuickReactBar({ isOwn, onPick }) {
+// Unified toolbar that contains both emojis and edit/delete actions
+function UnifiedToolbar({ isOwn, canEdit, canDelete, onPick, onEdit, onDelete }) {
     return (
         <div
-            className={`hidden group-hover:flex items-center gap-1 absolute -top-4 ${
+            className={`hidden group-hover:flex items-center gap-1 absolute -top-5 ${
                 isOwn ? 'right-0' : 'left-0'
-            } bg-[#1F1F2B] border border-white/10 rounded-full px-1.5 py-1 shadow-lg z-10`}
+            } bg-[#1F1F2B] border border-white/10 rounded-full px-2 py-1 shadow-lg z-10`}
         >
+            {/* Reaction Emojis */}
             {QUICK_EMOJIS.map((emoji) => (
                 <button
                     key={emoji}
                     onClick={() => onPick(emoji)}
-                    className="text-sm leading-none hover:scale-125 transition-transform"
+                    className="text-sm leading-none hover:scale-125 transition-transform px-0.5"
                     aria-label={`React with ${emoji}`}
                 >
                     {emoji}
                 </button>
             ))}
+
+            {/* Divider (only show if actions are available) */}
+            {(canEdit || canDelete) && (
+                <div className="w-px h-3.5 bg-white/10 mx-1" />
+            )}
+
+            {/* Actions */}
+            {canEdit && (
+                <button onClick={onEdit} className="text-[#8B899C] hover:text-[#E8E6F0] p-0.5" aria-label="Edit message">
+                    <MdEdit style={{ fontSize: 14 }} />
+                </button>
+            )}
+            {canDelete && (
+                <button onClick={onDelete} className="text-[#8B899C] hover:text-red-400 p-0.5" aria-label="Delete message">
+                    <MdDelete style={{ fontSize: 14 }} />
+                </button>
+            )}
         </div>
     );
 }
 
-// Reaction chips shown under a message once it has any reactions.
 function ReactionChips({ message, currentUser, onToggle }) {
     const reactions = message.reactions || {};
     const emojis = Object.keys(reactions).filter((e) => (reactions[e] || []).length > 0);
@@ -164,9 +173,11 @@ function ReactionChips({ message, currentUser, onToggle }) {
     );
 }
 
-// Renders the body of a single message: plain text, an inline image,
-// or a document card with a download link.
 function MessageBody({ message, isOwn }) {
+    if (message.deleted) {
+        return <span className="italic text-[#5F5D6E]">This message was deleted</span>;
+    }
+
     const fileUrl = message.fileUrl ? `${baseURL}${message.fileUrl}` : null;
 
     if (message.messageType === 'IMAGE' && fileUrl) {
@@ -187,9 +198,7 @@ function MessageBody({ message, isOwn }) {
                 href={fileUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg ${
-                    isOwn ? 'bg-white/10' : 'bg-black/20'
-                }`}
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg ${isOwn ? 'bg-white/10' : 'bg-black/20'}`}
             >
                 <MdInsertDriveFile fontSize="small" />
                 <div className="min-w-0">
@@ -231,28 +240,41 @@ function ChatPage() {
     const [isSending, setIsSending] = useState(false);
     const [isConnecting, setIsConnecting] = useState(true);
 
-    // Attachment staged for sending, before it's uploaded.
     const [pendingFile, setPendingFile] = useState(null);
     const [pendingPreviewUrl, setPendingPreviewUrl] = useState(null);
     const [isUploading, setIsUploading] = useState(false);
 
-    // Owner-only: usernames waiting to be let into the room.
     const [pendingRequests, setPendingRequests] = useState([]);
 
-    // Quick wins: typing, presence, etc.
-    const [typingUsers, setTypingUsers] = useState([]); // usernames currently typing, excluding self
-    const [onlineUsers, setOnlineUsers] = useState([]); // usernames currently online in this room
+    const [typingUsers, setTypingUsers] = useState([]);
+    const [onlineUsers, setOnlineUsers] = useState([]);
     const typingTimeoutRef = useRef(null);
     const isTypingRef = useRef(false);
 
+    // Pagination (scroll-up to load older messages)
+    const [nextPage, setNextPage] = useState(1); // page 0 was the initial load
+    const [hasMoreMessages, setHasMoreMessages] = useState(true);
+    const [isLoadingOlder, setIsLoadingOlder] = useState(false);
+    const prevScrollHeightRef = useRef(0);
+    const isPrependingRef = useRef(false);
+
+    // Edit state
+    const [editingMessageId, setEditingMessageId] = useState(null);
+    const [editingContent, setEditingContent] = useState('');
+
+    // Members / kick panel (owner only)
+    const [showMembers, setShowMembers] = useState(false);
+
     const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 
-    // Load messages when component mounts or roomId changes
+    // Initial message load
     useEffect(() => {
         async function loadMessages() {
             try {
-                const messages = await getMessageApi(roomId);
-                setMessages(messages);
+                const initial = await getMessageApi(roomId, PAGE_SIZE, 0);
+                setMessages(initial);
+                setHasMoreMessages(initial.length === PAGE_SIZE);
+                setNextPage(1);
             } catch (error) {
                 toast.error("Failed to load messages");
             }
@@ -263,14 +285,13 @@ function ChatPage() {
         }
     }, [roomId]);
 
-    // Owner only: fetch anyone already waiting.
     useEffect(() => {
         async function loadPendingRequests() {
             try {
                 const list = await getPendingRequestsApi(roomId);
                 setPendingRequests(list || []);
             } catch (error) {
-                // Non-critical, skip silently.
+                // Non-critical.
             }
         }
 
@@ -279,15 +300,50 @@ function ChatPage() {
         }
     }, [roomId, isRoomOwner]);
 
-    // Scroll to bottom when messages change
+    // Scroll to bottom on new messages, but NOT when we just prepended older ones.
     useEffect(() => {
+        if (isPrependingRef.current) {
+            // Restore scroll position so the view doesn't jump after prepending.
+            if (chatBoxRef.current) {
+                const newScrollHeight = chatBoxRef.current.scrollHeight;
+                chatBoxRef.current.scrollTop = newScrollHeight - prevScrollHeightRef.current;
+            }
+            isPrependingRef.current = false;
+            return;
+        }
         if (chatBoxRef.current) {
-            chatBoxRef.current.scroll({
-                top: chatBoxRef.current.scrollHeight,
-                behavior: "smooth",
-            });
+            chatBoxRef.current.scroll({ top: chatBoxRef.current.scrollHeight, behavior: "smooth" });
         }
     }, [messages]);
+
+    async function loadOlderMessages() {
+        if (isLoadingOlder || !hasMoreMessages) return;
+        setIsLoadingOlder(true);
+        try {
+            const older = await getMessageApi(roomId, PAGE_SIZE, nextPage);
+            if (older.length === 0) {
+                setHasMoreMessages(false);
+            } else {
+                if (chatBoxRef.current) {
+                    prevScrollHeightRef.current = chatBoxRef.current.scrollHeight;
+                }
+                isPrependingRef.current = true;
+                setMessages((prev) => [...older, ...prev]);
+                setNextPage((p) => p + 1);
+                if (older.length < PAGE_SIZE) setHasMoreMessages(false);
+            }
+        } catch (error) {
+            toast.error("Failed to load older messages");
+        } finally {
+            setIsLoadingOlder(false);
+        }
+    }
+
+    function handleChatScroll(e) {
+        if (e.target.scrollTop < 60 && hasMoreMessages && !isLoadingOlder) {
+            loadOlderMessages();
+        }
+    }
 
     useEffect(() => {
         const connectWebSocket = () => {
@@ -304,7 +360,6 @@ function ChatPage() {
                     setMessages((prev) => [...prev, newMessage]);
                 });
 
-                // Typing indicator
                 client.subscribe(`/topic/room/${roomId}/typing`, (message) => {
                     const event = JSON.parse(message.body);
                     if (event.userName === currentUser) return;
@@ -316,13 +371,11 @@ function ChatPage() {
                     });
                 });
 
-                // Presence (online users)
                 client.subscribe(`/topic/room/${roomId}/presence`, (message) => {
                     const list = JSON.parse(message.body);
                     setOnlineUsers(list || []);
                 });
 
-                // Read receipts
                 client.subscribe(`/topic/room/${roomId}/seen`, (message) => {
                     const event = JSON.parse(message.body);
                     setMessages((prev) =>
@@ -330,7 +383,6 @@ function ChatPage() {
                     );
                 });
 
-                // Reactions
                 client.subscribe(`/topic/room/${roomId}/reactions`, (message) => {
                     const event = JSON.parse(message.body);
                     setMessages((prev) =>
@@ -338,7 +390,41 @@ function ChatPage() {
                     );
                 });
 
-                // Owner only: live notifications when someone new asks to join.
+                // Edited messages
+                client.subscribe(`/topic/room/${roomId}/messageEdited`, (message) => {
+                    const event = JSON.parse(message.body);
+                    setMessages((prev) =>
+                        prev.map((m) =>
+                            m.id === event.messageId ? { ...m, content: event.content, edited: true } : m
+                        )
+                    );
+                });
+
+                // Deleted messages
+                client.subscribe(`/topic/room/${roomId}/messageDeleted`, (message) => {
+                    const event = JSON.parse(message.body);
+                    setMessages((prev) =>
+                        prev.map((m) =>
+                            m.id === event.messageId
+                                ? { ...m, deleted: true, content: '', fileUrl: null, fileName: null, fileType: null }
+                                : m
+                        )
+                    );
+                });
+
+                // Being kicked
+                client.subscribe(`/topic/room/${roomId}/kicked`, (message) => {
+                    const event = JSON.parse(message.body);
+                    if (event.userName !== currentUser) return;
+                    toast.error("You were removed from this room by the owner.");
+                    if (client.connected) client.disconnect();
+                    setConnected(false);
+                    setCurrentUser("");
+                    setRoomId("");
+                    setIsRoomOwner(false);
+                    navigate('/');
+                });
+
                 if (isRoomOwner) {
                     client.subscribe(`/topic/room/${roomId}/joinRequests`, (message) => {
                         const event = JSON.parse(message.body);
@@ -349,7 +435,6 @@ function ChatPage() {
                     });
                 }
 
-                // Announce that we're online in this room.
                 client.send(`/app/presence/${roomId}`, {}, JSON.stringify({ userName: currentUser }));
             });
         };
@@ -359,18 +444,16 @@ function ChatPage() {
         }
     }, [roomId, isRoomOwner]);
 
-    // Revoke the local preview object URL when it's replaced or the component unmounts.
     useEffect(() => {
         return () => {
             if (pendingPreviewUrl) URL.revokeObjectURL(pendingPreviewUrl);
         };
     }, [pendingPreviewUrl]);
 
-    // Mark any messages from other people as "seen by me" once they're on screen.
     useEffect(() => {
         if (!stompClient || !connected) return;
         messages.forEach((message) => {
-            if (!message.id || message.sender === currentUser) return;
+            if (!message.id || message.sender === currentUser || message.deleted) return;
             const seenBy = message.seenBy || [];
             if (!seenBy.includes(currentUser)) {
                 stompClient.send(
@@ -392,22 +475,54 @@ function ChatPage() {
         }
     }
 
+    async function handleKick(userName) {
+        try {
+            await kickUserApi(roomId, userName);
+            setOnlineUsers((prev) => prev.filter((u) => u !== userName));
+            toast.success(`${userName} was removed from the room`);
+        } catch (error) {
+            toast.error("Failed to remove user");
+        }
+    }
+
     function toggleReaction(messageId, emoji) {
         if (!stompClient || !connected || !messageId) return;
+        stompClient.send(`/app/react/${roomId}`, {}, JSON.stringify({ messageId, emoji, userName: currentUser }));
+    }
+
+    function startEdit(message) {
+        setEditingMessageId(message.id);
+        setEditingContent(message.content);
+    }
+
+    function cancelEdit() {
+        setEditingMessageId(null);
+        setEditingContent('');
+    }
+
+    function saveEdit(messageId) {
+        if (!stompClient || !connected || !editingContent.trim()) return;
         stompClient.send(
-            `/app/react/${roomId}`,
+            `/app/editMessage/${roomId}`,
             {},
-            JSON.stringify({ messageId, emoji, userName: currentUser })
+            JSON.stringify({ messageId, userName: currentUser, content: editingContent.trim() })
+        );
+        cancelEdit();
+    }
+
+    function deleteMessage(messageId) {
+        if (!stompClient || !connected) return;
+        if (!window.confirm('Delete this message?')) return;
+        stompClient.send(
+            `/app/deleteMessage/${roomId}`,
+            {},
+            JSON.stringify({ messageId, userName: currentUser })
         );
     }
 
     function sendTyping(isTyping) {
         if (!stompClient || !connected) return;
-        stompClient.send(
-            `/app/typing/${roomId}`,
-            {},
-            JSON.stringify({ userName: currentUser, typing: isTyping })
-        );
+        stompClient.send(`/app/typing/${roomId}`, {}, JSON.stringify({ userName: currentUser, typing: isTyping }));
     }
 
     function handleInputChange(e) {
@@ -440,16 +555,12 @@ function ChatPage() {
     function handleFileChosen(e) {
         const file = e.target.files?.[0];
         e.target.value = '';
-
         if (!file) return;
-
         if (file.size > MAX_FILE_SIZE_BYTES) {
             toast.error("File is too large. Max size is 10MB.");
             return;
         }
-
         if (pendingPreviewUrl) URL.revokeObjectURL(pendingPreviewUrl);
-
         setPendingFile(file);
         setPendingPreviewUrl(file.type.startsWith('image/') ? URL.createObjectURL(file) : null);
     }
@@ -540,28 +651,22 @@ function ChatPage() {
                     </div>
                     <span
                         className={`ml-2 flex items-center gap-1.5 text-xs px-2 py-1 rounded-full ${
-                            isConnecting
-                                ? 'bg-yellow-500/10 text-yellow-400'
-                                : 'bg-emerald-500/10 text-emerald-400'
+                            isConnecting ? 'bg-yellow-500/10 text-yellow-400' : 'bg-emerald-500/10 text-emerald-400'
                         }`}
                     >
-                        <span
-                            className={`w-1.5 h-1.5 rounded-full ${
-                                isConnecting ? 'bg-yellow-400 animate-pulse' : 'bg-emerald-400'
-                            }`}
-                        />
+                        <span className={`w-1.5 h-1.5 rounded-full ${isConnecting ? 'bg-yellow-400 animate-pulse' : 'bg-emerald-400'}`} />
                         {isConnecting ? 'Connecting' : 'Live'}
                     </span>
                     {isRoomOwner && (
-                        <span className="ml-1 text-xs px-2 py-1 rounded-full bg-[#4C3AED]/15 text-[#8B7CFF]">
-                            Owner
-                        </span>
+                        <span className="ml-1 text-xs px-2 py-1 rounded-full bg-[#4C3AED]/15 text-[#8B7CFF]">Owner</span>
                     )}
-                    {onlineUsers.length > 0 && (
-                        <span className="ml-1 text-xs px-2 py-1 rounded-full bg-white/5 text-[#8B899C]">
-                            {onlineUsers.length} online
-                        </span>
-                    )}
+                    <button
+                        onClick={() => setShowMembers((s) => !s)}
+                        className="ml-1 flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-white/5 text-[#8B899C] hover:bg-white/10"
+                    >
+                        <MdGroup style={{ fontSize: 14 }} />
+                        {onlineUsers.length}
+                    </button>
                 </div>
 
                 <div className="flex items-center gap-3">
@@ -577,6 +682,40 @@ function ChatPage() {
                     </button>
                 </div>
             </header>
+
+            {/* Members panel */}
+            {showMembers && (
+                <div className="absolute top-16 left-4 sm:left-8 z-20 w-64 bg-[#1F1F2B] border border-white/10 rounded-xl shadow-xl overflow-hidden">
+                    <div className="px-4 py-2.5 border-b border-white/5 flex items-center justify-between">
+                        <span className="text-sm font-medium">Members online</span>
+                        <button onClick={() => setShowMembers(false)} className="text-[#8B899C] hover:text-[#E8E6F0]">
+                            <MdClose style={{ fontSize: 16 }} />
+                        </button>
+                    </div>
+                    <div className="max-h-64 overflow-y-auto">
+                        {onlineUsers.length === 0 && (
+                            <p className="text-xs text-[#5F5D6E] px-4 py-3">No one else online right now.</p>
+                        )}
+                        {onlineUsers.map((name) => (
+                            <div key={name} className="flex items-center gap-3 px-4 py-2.5 border-b border-white/5 last:border-b-0">
+                                <Avatar name={name} size={28} online />
+                                <span className="flex-1 text-sm truncate">
+                                    {name}
+                                    {name === currentUser ? ' (you)' : ''}
+                                </span>
+                                {isRoomOwner && name !== currentUser && (
+                                    <button
+                                        onClick={() => handleKick(name)}
+                                        className="text-xs px-2.5 py-1 rounded-md bg-red-500/15 text-red-400 hover:bg-red-500/25"
+                                    >
+                                        Remove
+                                    </button>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
 
             {/* Owner-only: live join-request panel */}
             {isRoomOwner && pendingRequests.length > 0 && (
@@ -613,13 +752,19 @@ function ChatPage() {
             {/* Chat Messages */}
             <main
                 ref={chatBoxRef}
+                onScroll={handleChatScroll}
                 className="flex-1 overflow-y-auto px-4 sm:px-8 py-6 flex flex-col gap-3"
                 style={{
-                    backgroundImage:
-                        'radial-gradient(circle at 1px 1px, rgba(255,255,255,0.035) 1px, transparent 0)',
+                    backgroundImage: 'radial-gradient(circle at 1px 1px, rgba(255,255,255,0.035) 1px, transparent 0)',
                     backgroundSize: '22px 22px',
                 }}
             >
+                {isLoadingOlder && (
+                    <div className="flex justify-center py-2">
+                        <span className="block w-5 h-5 border-2 border-white/20 border-t-[#8B7CFF] rounded-full animate-spin" />
+                    </div>
+                )}
+
                 {messages.length === 0 && (
                     <div className="flex-1 flex flex-col items-center justify-center text-center text-[#5F5D6E] gap-2">
                         <p className="text-sm">No messages yet.</p>
@@ -631,9 +776,11 @@ function ChatPage() {
                     const isOwn = message.sender === currentUser;
                     const prev = messages[index - 1];
                     const isSameSenderAsPrev = prev && prev.sender === message.sender;
+                    const showDateDivider = !prev || !isSameDay(new Date(prev.timeStamp), new Date(message.timeStamp));
+                    const isEditing = editingMessageId === message.id;
 
-                    const showDateDivider =
-                        !prev || !isSameDay(new Date(prev.timeStamp), new Date(message.timeStamp));
+                    const canEdit = isOwn && !message.deleted;
+                    const canDelete = (isOwn || isRoomOwner) && !message.deleted;
 
                     return (
                         <React.Fragment key={message.id || index}>
@@ -647,11 +794,7 @@ function ChatPage() {
                                 {!isOwn && (
                                     <div className="w-8">
                                         {!isSameSenderAsPrev && (
-                                            <Avatar
-                                                name={message.sender}
-                                                size={32}
-                                                online={onlineUsers.includes(message.sender)}
-                                            />
+                                            <Avatar name={message.sender} size={32} online={onlineUsers.includes(message.sender)} />
                                         )}
                                     </div>
                                 )}
@@ -662,21 +805,57 @@ function ChatPage() {
                                             {isOwn ? 'You' : message.sender}
                                         </span>
                                     )}
-                                    <div className="group relative">
-                                        <QuickReactBar isOwn={isOwn} onPick={(emoji) => toggleReaction(message.id, emoji)} />
-                                        <div
-                                            className={`px-3 py-2.5 text-sm leading-relaxed shadow-sm break-words ${
-                                                isOwn
-                                                    ? 'bg-[#4C3AED] text-white rounded-2xl rounded-br-md'
-                                                    : 'bg-[#1F1F2B] text-[#E8E6F0] rounded-2xl rounded-bl-md border border-white/5'
-                                            } ${message.messageType === 'IMAGE' ? 'p-1.5' : ''}`}
-                                        >
-                                            <MessageBody message={message} isOwn={isOwn} />
+
+                                    {isEditing ? (
+                                        <div className="w-full min-w-[220px] flex flex-col gap-1.5">
+                                            <textarea
+                                                value={editingContent}
+                                                onChange={(e) => setEditingContent(e.target.value)}
+                                                className="w-full text-sm rounded-lg bg-[#1F1F2B] border border-[#4C3AED]/50 px-3 py-2 text-[#E8E6F0] focus:outline-none resize-none"
+                                                rows={2}
+                                                autoFocus
+                                            />
+                                            <div className="flex gap-2 justify-end">
+                                                <button onClick={cancelEdit} className="text-xs px-2.5 py-1 rounded-md bg-white/5 text-[#8B899C] hover:bg-white/10">
+                                                    Cancel
+                                                </button>
+                                                <button
+                                                    onClick={() => saveEdit(message.id)}
+                                                    className="text-xs px-2.5 py-1 rounded-md bg-[#4C3AED] text-white hover:bg-[#5B4AF0]"
+                                                >
+                                                    Save
+                                                </button>
+                                            </div>
                                         </div>
-                                    </div>
-                                    <ReactionChips message={message} currentUser={currentUser} onToggle={toggleReaction} />
-                                    <span className="text-[10px] text-[#5F5D6E] mt-1 px-1 flex items-center">
+                                    ) : (
+                                        <div className="group relative">
+                                            {!message.deleted && (
+                                                <UnifiedToolbar
+                                                    isOwn={isOwn}
+                                                    canEdit={canEdit}
+                                                    canDelete={canDelete}
+                                                    onPick={(emoji) => toggleReaction(message.id, emoji)}
+                                                    onEdit={() => startEdit(message)}
+                                                    onDelete={() => deleteMessage(message.id)}
+                                                />
+                                            )}
+                                            <div
+                                                className={`px-3 py-2.5 text-sm leading-relaxed shadow-sm break-words ${
+                                                    isOwn
+                                                        ? 'bg-[#4C3AED] text-white rounded-2xl rounded-br-md'
+                                                        : 'bg-[#1F1F2B] text-[#E8E6F0] rounded-2xl rounded-bl-md border border-white/5'
+                                                } ${message.messageType === 'IMAGE' && !message.deleted ? 'p-1.5' : ''}`}
+                                            >
+                                                <MessageBody message={message} isOwn={isOwn} />
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {!message.deleted && <ReactionChips message={message} currentUser={currentUser} onToggle={toggleReaction} />}
+
+                                    <span className="text-[10px] text-[#5F5D6E] mt-1 px-1 flex items-center gap-1">
                                         {timeAgo(message.timeStamp)}
+                                        {message.edited && !message.deleted && <span className="italic">(edited)</span>}
                                         <SeenTicks message={message} currentUser={currentUser} />
                                     </span>
                                 </div>
@@ -686,7 +865,6 @@ function ChatPage() {
                 })}
             </main>
 
-            {/* Typing indicator */}
             {typingUsers.length > 0 && (
                 <div className="px-4 sm:px-8 pb-1 text-xs text-[#8B899C] italic">
                     {typingUsers.length === 1
@@ -698,7 +876,6 @@ function ChatPage() {
             {/* Message Input */}
             <div className="px-4 sm:px-8 py-4 bg-[#181822] border-t border-white/5">
                 <div className="max-w-3xl mx-auto">
-                    {/* Staged attachment preview */}
                     {pendingFile && (
                         <div className="flex items-center gap-3 mb-2 px-3 py-2 bg-[#1F1F2B] border border-white/10 rounded-xl">
                             {pendingPreviewUrl ? (

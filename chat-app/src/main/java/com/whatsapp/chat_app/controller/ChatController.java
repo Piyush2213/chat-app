@@ -1,5 +1,7 @@
 package com.whatsapp.chat_app.controller;
 
+import com.whatsapp.chat_app.request.DeleteMessageRequest;
+import com.whatsapp.chat_app.request.EditMessageRequest;
 import com.whatsapp.chat_app.request.MarkSeenRequest;
 import com.whatsapp.chat_app.request.MessageRequest;
 import com.whatsapp.chat_app.request.PresenceRequest;
@@ -37,33 +39,39 @@ public class ChatController {
     @MessageMapping("/sendMessage/{roomId}")
     @SendTo("/topic/room/{roomId}")
     public MessageResponse sendMessage(@DestinationVariable String roomId, @RequestBody MessageRequest request) {
-        // Delegate to the service layer to send the message
         if (request.getTimeStamp() == null) {
             request.setTimeStamp(LocalDateTime.now());
         }
         return chatService.sendMessage(roomId, request);
     }
 
-    // Broadcasts "X is typing" / "X stopped typing" to everyone else in the room.
     @MessageMapping("/typing/{roomId}")
     public void typing(@DestinationVariable String roomId, @RequestBody TypingRequest request) {
         chatService.broadcastTyping(roomId, request.getUserName(), request.isTyping());
     }
 
-    // Marks a single message as seen by the given user, broadcasts the updated seenBy list.
     @MessageMapping("/markSeen/{roomId}")
     public void markSeen(@DestinationVariable String roomId, @RequestBody MarkSeenRequest request) {
         chatService.markMessageSeen(roomId, request.getMessageId(), request.getUserName());
     }
 
-    // Toggles an emoji reaction from a user on a message, broadcasts the updated reaction map.
     @MessageMapping("/react/{roomId}")
     public void react(@DestinationVariable String roomId, @RequestBody ReactionRequest request) {
         chatService.toggleReaction(roomId, request.getMessageId(), request.getEmoji(), request.getUserName());
     }
 
-    // Called once a client connects, registers them as online for this room and
-    // broadcasts the full online list back to everyone in the room.
+    // Only the author can edit; silently ignored otherwise (checked in the service layer).
+    @MessageMapping("/editMessage/{roomId}")
+    public void editMessage(@DestinationVariable String roomId, @RequestBody EditMessageRequest request) {
+        chatService.editMessage(roomId, request.getMessageId(), request.getUserName(), request.getContent());
+    }
+
+    // Author or room owner can delete; checked in the service layer.
+    @MessageMapping("/deleteMessage/{roomId}")
+    public void deleteMessage(@DestinationVariable String roomId, @RequestBody DeleteMessageRequest request) {
+        chatService.deleteMessage(roomId, request.getMessageId(), request.getUserName());
+    }
+
     @MessageMapping("/presence/{roomId}")
     public void presence(@DestinationVariable String roomId, @RequestBody PresenceRequest request, SimpMessageHeaderAccessor headerAccessor) {
         String sessionId = headerAccessor.getSessionId();

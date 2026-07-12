@@ -5,6 +5,8 @@ import com.whatsapp.chat_app.entity.Message;
 import com.whatsapp.chat_app.entity.Room;
 import com.whatsapp.chat_app.exception.RoomNotFoundExistsException;
 import com.whatsapp.chat_app.request.MessageRequest;
+import com.whatsapp.chat_app.resoponse.MessageDeleteEvent;
+import com.whatsapp.chat_app.resoponse.MessageEditEvent;
 import com.whatsapp.chat_app.resoponse.MessageResponse;
 import com.whatsapp.chat_app.resoponse.ReactionEvent;
 import com.whatsapp.chat_app.resoponse.SeenEvent;
@@ -28,15 +30,11 @@ public class ChatService {
     private SimpMessagingTemplate messagingTemplate;
 
     public MessageResponse sendMessage(String roomId, MessageRequest request) {
-        // Find the room by roomId
         Room room = roomRepo.findByRoomId(roomId);
-
-        // Check if room exists
         if (room == null) {
             throw new RoomNotFoundExistsException("Room with Id " + roomId + " does not exist");
         }
 
-        // Create the message and populate it with the request details
         Message message = new Message();
         message.setId(UUID.randomUUID().toString());
         message.setSender(request.getSender());
@@ -46,17 +44,14 @@ public class ChatService {
         message.setFileUrl(request.getFileUrl());
         message.setFileName(request.getFileName());
         message.setFileType(request.getFileType());
-        // The sender has, definitionally, already seen their own message.
         message.setSeenBy(new ArrayList<>(List.of(request.getSender())));
         message.setReactions(new HashMap<>());
+        message.setEdited(false);
+        message.setDeleted(false);
 
-        // Add the message to the room's message list
         room.getMessages().add(message);
-
-        // Save the updated room to the repository
         roomRepo.save(room);
 
-        // Return a MessageResponse object to be sent to the client
         MessageResponse messageResponse = new MessageResponse();
         messageResponse.setId(message.getId());
         messageResponse.setSender(message.getSender());
@@ -69,6 +64,8 @@ public class ChatService {
         messageResponse.setFileType(message.getFileType());
         messageResponse.setSeenBy(message.getSeenBy());
         messageResponse.setReactions(message.getReactions());
+        messageResponse.setEdited(message.isEdited());
+        messageResponse.setDeleted(message.isDeleted());
 
         return messageResponse;
     }
@@ -137,6 +134,66 @@ public class ChatService {
         messagingTemplate.convertAndSend(
                 "/topic/room/" + roomId + "/reactions",
                 new ReactionEvent(messageId, target.getReactions())
+        );
+    }
+
+    // Only the original author can edit their own message, and only if it
+    // hasn't been deleted.
+    public void editMessage(String roomId, String messageId, String userName, String newContent) {
+        Room room = roomRepo.findByRoomId(roomId);
+        if (room == null) {
+            throw new RoomNotFoundExistsException("Room with Id " + roomId + " does not exist");
+        }
+
+        Message target = room.getMessages().stream()
+                .filter(m -> messageId.equals(m.getId()))
+                .findFirst()
+                .orElse(null);
+
+        if (target == null) return;
+        if (!userName.equals(target.getSender())) return; // not the author
+        if (target.isDeleted()) return;
+
+        target.setContent(newContent);
+        target.setEdited(true);
+        roomRepo.save(room);
+
+        messagingTemplate.convertAndSend(
+                "/topic/room/" + roomId + "/messageEdited",
+                new MessageEditEvent(messageId, newContent)
+        );
+    }
+
+    // The author can delete their own message; the room owner can delete
+    // anyone's message (moderation). Soft-delete: content is cleared but the
+    // message stays as a placeholder in the conversation.
+    public void deleteMessage(String roomId, String messageId, String userName) {
+        Room room = roomRepo.findByRoomId(roomId);
+        if (room == null) {
+            throw new RoomNotFoundExistsException("Room with Id " + roomId + " does not exist");
+        }
+
+        Message target = room.getMessages().stream()
+                .filter(m -> messageId.equals(m.getId()))
+                .findFirst()
+                .orElse(null);
+
+        if (target == null) return;
+
+        boolean isAuthor = userName.equals(target.getSender());
+        boolean isOwner = userName.equals(room.getCreatedBy());
+        if (!isAuthor && !isOwner) return;
+
+        target.setDeleted(true);
+        target.setContent("");
+        target.setFileUrl(null);
+        target.setFileName(null);
+        target.setFileType(null);
+        roomRepo.save(room);
+
+        messagingTemplate.convertAndSend(
+                "/topic/room/" + roomId + "/messageDeleted",
+                new MessageDeleteEvent(messageId)
         );
     }
 }

@@ -8,7 +8,6 @@ export const createRoomApi = async (roomDetail) => {
     return response.data;
 }
 
-// Now requires userName, since the backend needs to know who's asking to join.
 export const JoinChatApi = async (roomId, userName) => {
     const response = await httpClient.get(`api/v1/rooms/join-room/${roomId}`, {
         params: { userName },
@@ -16,22 +15,29 @@ export const JoinChatApi = async (roomId, userName) => {
     return response.data;
 }
 
+// page 0 = most recent `size` messages. Higher page = further back in history.
 export const getMessageApi = async (roomId, size = 50, page = 0) => {
     const response = await httpClient.get(`api/v1/rooms/${roomId}/messages?size=${size}&page=${page}`);
     return response.data;
 }
 
-// Room owner fetches the current wait list (e.g. on page load).
 export const getPendingRequestsApi = async (roomId) => {
     const response = await httpClient.get(`api/v1/rooms/${roomId}/pending-requests`);
     return response.data;
 }
 
-// Room owner accepts or denies a pending user.
 export const decideJoinRequestApi = async (roomId, userName, approved) => {
     const response = await httpClient.post(`api/v1/rooms/${roomId}/decision`, {
         userName,
         approved,
+    });
+    return response.data;
+}
+
+// Owner removes an active member from the room.
+export const kickUserApi = async (roomId, userName) => {
+    const response = await httpClient.post(`api/v1/rooms/${roomId}/kick`, {
+        userName,
     });
     return response.data;
 }

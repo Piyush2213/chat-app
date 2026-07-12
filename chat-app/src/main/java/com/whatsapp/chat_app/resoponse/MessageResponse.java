@@ -23,4 +23,7 @@ public class MessageResponse {
 
     private List<String> seenBy;
     private Map<String, List<String>> reactions;
+
+    private boolean edited;
+    private boolean deleted;
 }
