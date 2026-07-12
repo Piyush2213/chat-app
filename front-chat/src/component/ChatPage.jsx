@@ -104,32 +104,37 @@ function SeenTicks({ message, currentUser }) {
     );
 }
 
-// Unified toolbar that contains both emojis and edit/delete actions
-function UnifiedToolbar({ isOwn, canEdit, canDelete, onPick, onEdit, onDelete }) {
+function QuickReactBar({ isOwn, onPick }) {
     return (
         <div
-            className={`hidden group-hover:flex items-center gap-1 absolute -top-5 ${
+            className={`hidden group-hover:flex items-center gap-1 absolute -top-4 ${
                 isOwn ? 'right-0' : 'left-0'
-            } bg-[#1F1F2B] border border-white/10 rounded-full px-2 py-1 shadow-lg z-10`}
+            } bg-[#1F1F2B] border border-white/10 rounded-full px-1.5 py-1 shadow-lg z-10`}
         >
-            {/* Reaction Emojis */}
             {QUICK_EMOJIS.map((emoji) => (
                 <button
                     key={emoji}
                     onClick={() => onPick(emoji)}
-                    className="text-sm leading-none hover:scale-125 transition-transform px-0.5"
+                    className="text-sm leading-none hover:scale-125 transition-transform"
                     aria-label={`React with ${emoji}`}
                 >
                     {emoji}
                 </button>
             ))}
+        </div>
+    );
+}
 
-            {/* Divider (only show if actions are available) */}
-            {(canEdit || canDelete) && (
-                <div className="w-px h-3.5 bg-white/10 mx-1" />
-            )}
-
-            {/* Actions */}
+// Edit/delete controls, shown on hover for messages the current user is
+// allowed to act on.
+function MessageActions({ canEdit, canDelete, isOwn, onEdit, onDelete }) {
+    if (!canEdit && !canDelete) return null;
+    return (
+        <div
+            className={`hidden group-hover:flex items-center gap-1 absolute -top-4 ${
+                isOwn ? 'left-0' : 'right-0'
+            } bg-[#1F1F2B] border border-white/10 rounded-full px-1.5 py-1 shadow-lg z-10`}
+        >
             {canEdit && (
                 <button onClick={onEdit} className="text-[#8B899C] hover:text-[#E8E6F0] p-0.5" aria-label="Edit message">
                     <MdEdit style={{ fontSize: 14 }} />
@@ -410,6 +415,17 @@ function ChatPage() {
                                 : m
                         )
                     );
+                });
+
+                // Room shut down by an admin -- everyone gets removed, not just one user.
+                client.subscribe(`/topic/room/${roomId}/roomClosed`, () => {
+                    toast.error("This room has been shut down by an administrator.");
+                    if (client.connected) client.disconnect();
+                    setConnected(false);
+                    setCurrentUser("");
+                    setRoomId("");
+                    setIsRoomOwner(false);
+                    navigate('/');
                 });
 
                 // Being kicked
@@ -830,15 +846,15 @@ function ChatPage() {
                                     ) : (
                                         <div className="group relative">
                                             {!message.deleted && (
-                                                <UnifiedToolbar
-                                                    isOwn={isOwn}
-                                                    canEdit={canEdit}
-                                                    canDelete={canDelete}
-                                                    onPick={(emoji) => toggleReaction(message.id, emoji)}
-                                                    onEdit={() => startEdit(message)}
-                                                    onDelete={() => deleteMessage(message.id)}
-                                                />
+                                                <QuickReactBar isOwn={isOwn} onPick={(emoji) => toggleReaction(message.id, emoji)} />
                                             )}
+                                            <MessageActions
+                                                canEdit={canEdit}
+                                                canDelete={canDelete}
+                                                isOwn={isOwn}
+                                                onEdit={() => startEdit(message)}
+                                                onDelete={() => deleteMessage(message.id)}
+                                            />
                                             <div
                                                 className={`px-3 py-2.5 text-sm leading-relaxed shadow-sm break-words ${
                                                     isOwn
