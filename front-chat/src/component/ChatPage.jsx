@@ -13,6 +13,8 @@ import { getMessageApi, getPendingRequestsApi, decideJoinRequestApi } from '../s
 import { uploadFileApi } from '../services/FileService';
 import { timeAgo } from '../config/Helper';
 
+const QUICK_EMOJIS = ['👍', '❤️', '😂'];
+
 // Deterministic accent color per username, so the same person always
 // gets the same avatar color across sessions.
 const AVATAR_PALETTE = [
@@ -38,20 +40,27 @@ function initialsForName(name = '') {
     return (parts[0][0] + parts[1][0]).toUpperCase();
 }
 
-function Avatar({ name, size = 40 }) {
+function Avatar({ name, size = 40, online = false }) {
     const { bg, fg } = colorForName(name);
     return (
-        <div
-            style={{
-                width: size,
-                height: size,
-                minWidth: size,
-                backgroundColor: bg,
-                color: fg,
-            }}
-            className="rounded-full flex items-center justify-center font-semibold select-none"
-        >
-            <span style={{ fontSize: size * 0.4 }}>{initialsForName(name)}</span>
+        <div className="relative shrink-0" style={{ width: size, height: size }}>
+            <div
+                style={{
+                    width: size,
+                    height: size,
+                    backgroundColor: bg,
+                    color: fg,
+                }}
+                className="rounded-full flex items-center justify-center font-semibold select-none"
+            >
+                <span style={{ fontSize: size * 0.4 }}>{initialsForName(name)}</span>
+            </div>
+            {online && (
+                <span
+                    className="absolute bottom-0 right-0 rounded-full bg-emerald-400 border-2 border-[#12121A]"
+                    style={{ width: Math.max(size * 0.32, 8), height: Math.max(size * 0.32, 8) }}
+                />
+            )}
         </div>
     );
 }
@@ -61,6 +70,98 @@ function formatFileSize(bytes) {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function isSameDay(a, b) {
+    return (
+        a.getFullYear() === b.getFullYear() &&
+        a.getMonth() === b.getMonth() &&
+        a.getDate() === b.getDate()
+    );
+}
+
+function formatDateDivider(timeStamp) {
+    const date = new Date(timeStamp);
+    const today = new Date();
+    const yesterday = new Date();
+    yesterday.setDate(today.getDate() - 1);
+
+    if (isSameDay(date, today)) return 'Today';
+    if (isSameDay(date, yesterday)) return 'Yesterday';
+    return date.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' });
+}
+
+function DateDivider({ label }) {
+    return (
+        <div className="flex items-center gap-3 my-2 select-none">
+            <div className="flex-1 h-px bg-white/5" />
+            <span className="text-[11px] text-[#5F5D6E] px-2">{label}</span>
+            <div className="flex-1 h-px bg-white/5" />
+        </div>
+    );
+}
+
+// Small "sent / seen" tick shown under the sender's own messages.
+function SeenTicks({ message, currentUser }) {
+    if (message.sender !== currentUser) return null;
+    const seenByOthers = (message.seenBy || []).filter((u) => u !== currentUser);
+    return (
+        <span className={`text-[10px] ml-1 ${seenByOthers.length > 0 ? 'text-[#8B7CFF]' : 'text-[#5F5D6E]'}`}>
+            {seenByOthers.length > 0 ? '✓✓' : '✓'}
+        </span>
+    );
+}
+
+// Hover-to-react row of quick emoji buttons.
+function QuickReactBar({ isOwn, onPick }) {
+    return (
+        <div
+            className={`hidden group-hover:flex items-center gap-1 absolute -top-4 ${
+                isOwn ? 'right-0' : 'left-0'
+            } bg-[#1F1F2B] border border-white/10 rounded-full px-1.5 py-1 shadow-lg z-10`}
+        >
+            {QUICK_EMOJIS.map((emoji) => (
+                <button
+                    key={emoji}
+                    onClick={() => onPick(emoji)}
+                    className="text-sm leading-none hover:scale-125 transition-transform"
+                    aria-label={`React with ${emoji}`}
+                >
+                    {emoji}
+                </button>
+            ))}
+        </div>
+    );
+}
+
+// Reaction chips shown under a message once it has any reactions.
+function ReactionChips({ message, currentUser, onToggle }) {
+    const reactions = message.reactions || {};
+    const emojis = Object.keys(reactions).filter((e) => (reactions[e] || []).length > 0);
+    if (emojis.length === 0) return null;
+
+    return (
+        <div className="flex flex-wrap gap-1 mt-1">
+            {emojis.map((emoji) => {
+                const users = reactions[emoji];
+                const reactedByMe = users.includes(currentUser);
+                return (
+                    <button
+                        key={emoji}
+                        onClick={() => onToggle(message.id, emoji)}
+                        className={`text-xs px-1.5 py-0.5 rounded-full border transition-colors ${
+                            reactedByMe
+                                ? 'bg-[#4C3AED]/20 border-[#4C3AED]/50 text-[#C9C1FF]'
+                                : 'bg-white/5 border-white/10 text-[#C9C7D4] hover:bg-white/10'
+                        }`}
+                        title={users.join(', ')}
+                    >
+                        {emoji} {users.length}
+                    </button>
+                );
+            })}
+        </div>
+    );
 }
 
 // Renders the body of a single message: plain text, an inline image,
@@ -131,14 +232,20 @@ function ChatPage() {
     const [isConnecting, setIsConnecting] = useState(true);
 
     // Attachment staged for sending, before it's uploaded.
-    const [pendingFile, setPendingFile] = useState(null); // File object
-    const [pendingPreviewUrl, setPendingPreviewUrl] = useState(null); // local object URL for image preview
+    const [pendingFile, setPendingFile] = useState(null);
+    const [pendingPreviewUrl, setPendingPreviewUrl] = useState(null);
     const [isUploading, setIsUploading] = useState(false);
 
     // Owner-only: usernames waiting to be let into the room.
     const [pendingRequests, setPendingRequests] = useState([]);
 
-    const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // keep in sync with backend limit
+    // Quick wins: typing, presence, etc.
+    const [typingUsers, setTypingUsers] = useState([]); // usernames currently typing, excluding self
+    const [onlineUsers, setOnlineUsers] = useState([]); // usernames currently online in this room
+    const typingTimeoutRef = useRef(null);
+    const isTypingRef = useRef(false);
+
+    const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 
     // Load messages when component mounts or roomId changes
     useEffect(() => {
@@ -156,8 +263,7 @@ function ChatPage() {
         }
     }, [roomId]);
 
-    // Owner only: fetch anyone already waiting (e.g. requests that came in
-    // before the owner had this page open).
+    // Owner only: fetch anyone already waiting.
     useEffect(() => {
         async function loadPendingRequests() {
             try {
@@ -192,9 +298,44 @@ function ChatPage() {
                 setStompClient(client);
                 setIsConnecting(false);
                 toast.success("Connected!");
+
                 client.subscribe(`/topic/room/${roomId}`, (message) => {
                     const newMessage = JSON.parse(message.body);
-                    setMessages((prev) => [...prev, newMessage]); // Add new message to the state
+                    setMessages((prev) => [...prev, newMessage]);
+                });
+
+                // Typing indicator
+                client.subscribe(`/topic/room/${roomId}/typing`, (message) => {
+                    const event = JSON.parse(message.body);
+                    if (event.userName === currentUser) return;
+                    setTypingUsers((prev) => {
+                        if (event.typing) {
+                            return prev.includes(event.userName) ? prev : [...prev, event.userName];
+                        }
+                        return prev.filter((u) => u !== event.userName);
+                    });
+                });
+
+                // Presence (online users)
+                client.subscribe(`/topic/room/${roomId}/presence`, (message) => {
+                    const list = JSON.parse(message.body);
+                    setOnlineUsers(list || []);
+                });
+
+                // Read receipts
+                client.subscribe(`/topic/room/${roomId}/seen`, (message) => {
+                    const event = JSON.parse(message.body);
+                    setMessages((prev) =>
+                        prev.map((m) => (m.id === event.messageId ? { ...m, seenBy: event.seenBy } : m))
+                    );
+                });
+
+                // Reactions
+                client.subscribe(`/topic/room/${roomId}/reactions`, (message) => {
+                    const event = JSON.parse(message.body);
+                    setMessages((prev) =>
+                        prev.map((m) => (m.id === event.messageId ? { ...m, reactions: event.reactions } : m))
+                    );
                 });
 
                 // Owner only: live notifications when someone new asks to join.
@@ -207,6 +348,9 @@ function ChatPage() {
                         toast(`${event.userName} wants to join the room`);
                     });
                 }
+
+                // Announce that we're online in this room.
+                client.send(`/app/presence/${roomId}`, {}, JSON.stringify({ userName: currentUser }));
             });
         };
 
@@ -215,13 +359,28 @@ function ChatPage() {
         }
     }, [roomId, isRoomOwner]);
 
-    // Revoke the local preview object URL when it's replaced or the component unmounts,
-    // so we don't leak memory.
+    // Revoke the local preview object URL when it's replaced or the component unmounts.
     useEffect(() => {
         return () => {
             if (pendingPreviewUrl) URL.revokeObjectURL(pendingPreviewUrl);
         };
     }, [pendingPreviewUrl]);
+
+    // Mark any messages from other people as "seen by me" once they're on screen.
+    useEffect(() => {
+        if (!stompClient || !connected) return;
+        messages.forEach((message) => {
+            if (!message.id || message.sender === currentUser) return;
+            const seenBy = message.seenBy || [];
+            if (!seenBy.includes(currentUser)) {
+                stompClient.send(
+                    `/app/markSeen/${roomId}`,
+                    {},
+                    JSON.stringify({ messageId: message.id, userName: currentUser })
+                );
+            }
+        });
+    }, [messages, stompClient, connected]);
 
     async function respondToRequest(userName, approved) {
         try {
@@ -233,13 +392,53 @@ function ChatPage() {
         }
     }
 
+    function toggleReaction(messageId, emoji) {
+        if (!stompClient || !connected || !messageId) return;
+        stompClient.send(
+            `/app/react/${roomId}`,
+            {},
+            JSON.stringify({ messageId, emoji, userName: currentUser })
+        );
+    }
+
+    function sendTyping(isTyping) {
+        if (!stompClient || !connected) return;
+        stompClient.send(
+            `/app/typing/${roomId}`,
+            {},
+            JSON.stringify({ userName: currentUser, typing: isTyping })
+        );
+    }
+
+    function handleInputChange(e) {
+        setInput(e.target.value);
+
+        if (!isTypingRef.current) {
+            isTypingRef.current = true;
+            sendTyping(true);
+        }
+
+        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+        typingTimeoutRef.current = setTimeout(() => {
+            isTypingRef.current = false;
+            sendTyping(false);
+        }, 2000);
+    }
+
+    function stopTypingNow() {
+        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+        if (isTypingRef.current) {
+            isTypingRef.current = false;
+            sendTyping(false);
+        }
+    }
+
     function handleAttachClick() {
         fileInputRef.current?.click();
     }
 
     function handleFileChosen(e) {
         const file = e.target.files?.[0];
-        // Reset the input value so choosing the same file again still fires onChange.
         e.target.value = '';
 
         if (!file) return;
@@ -265,6 +464,7 @@ function ChatPage() {
         if (!stompClient || !connected || isSending || isUploading) return;
         if (!input.trim() && !pendingFile) return;
 
+        stopTypingNow();
         setIsSending(true);
         try {
             if (pendingFile) {
@@ -317,6 +517,7 @@ function ChatPage() {
     }
 
     function handleLogout() {
+        stopTypingNow();
         stompClient.disconnect();
         setConnected(false);
         setCurrentUser("");
@@ -356,11 +557,16 @@ function ChatPage() {
                             Owner
                         </span>
                     )}
+                    {onlineUsers.length > 0 && (
+                        <span className="ml-1 text-xs px-2 py-1 rounded-full bg-white/5 text-[#8B899C]">
+                            {onlineUsers.length} online
+                        </span>
+                    )}
                 </div>
 
                 <div className="flex items-center gap-3">
                     <div className="flex items-center gap-2">
-                        <Avatar name={currentUser} size={32} />
+                        <Avatar name={currentUser} size={32} online />
                         <span className="text-sm text-[#C9C7D4] hidden sm:inline">{currentUser}</span>
                     </div>
                     <button
@@ -426,42 +632,68 @@ function ChatPage() {
                     const prev = messages[index - 1];
                     const isSameSenderAsPrev = prev && prev.sender === message.sender;
 
-                    return (
-                        <div
-                            key={index}
-                            className={`flex items-end gap-2 ${isOwn ? 'justify-end' : 'justify-start'} ${
-                                isSameSenderAsPrev ? 'mt-0' : 'mt-3'
-                            }`}
-                        >
-                            {!isOwn && (
-                                <div className="w-8">
-                                    {!isSameSenderAsPrev && <Avatar name={message.sender} size={32} />}
-                                </div>
-                            )}
+                    const showDateDivider =
+                        !prev || !isSameDay(new Date(prev.timeStamp), new Date(message.timeStamp));
 
-                            <div className={`max-w-[75%] sm:max-w-md flex flex-col ${isOwn ? 'items-end' : 'items-start'}`}>
-                                {!isSameSenderAsPrev && (
-                                    <span className={`text-xs text-[#8B899C] mb-1 px-1 ${isOwn ? 'mr-1' : 'ml-1'}`}>
-                                        {isOwn ? 'You' : message.sender}
-                                    </span>
+                    return (
+                        <React.Fragment key={message.id || index}>
+                            {showDateDivider && <DateDivider label={formatDateDivider(message.timeStamp)} />}
+
+                            <div
+                                className={`flex items-end gap-2 ${isOwn ? 'justify-end' : 'justify-start'} ${
+                                    isSameSenderAsPrev && !showDateDivider ? 'mt-0' : 'mt-3'
+                                }`}
+                            >
+                                {!isOwn && (
+                                    <div className="w-8">
+                                        {!isSameSenderAsPrev && (
+                                            <Avatar
+                                                name={message.sender}
+                                                size={32}
+                                                online={onlineUsers.includes(message.sender)}
+                                            />
+                                        )}
+                                    </div>
                                 )}
-                                <div
-                                    className={`px-3 py-2.5 text-sm leading-relaxed shadow-sm break-words ${
-                                        isOwn
-                                            ? 'bg-[#4C3AED] text-white rounded-2xl rounded-br-md'
-                                            : 'bg-[#1F1F2B] text-[#E8E6F0] rounded-2xl rounded-bl-md border border-white/5'
-                                    } ${message.messageType === 'IMAGE' ? 'p-1.5' : ''}`}
-                                >
-                                    <MessageBody message={message} isOwn={isOwn} />
+
+                                <div className={`max-w-[75%] sm:max-w-md flex flex-col ${isOwn ? 'items-end' : 'items-start'}`}>
+                                    {!isSameSenderAsPrev && (
+                                        <span className={`text-xs text-[#8B899C] mb-1 px-1 ${isOwn ? 'mr-1' : 'ml-1'}`}>
+                                            {isOwn ? 'You' : message.sender}
+                                        </span>
+                                    )}
+                                    <div className="group relative">
+                                        <QuickReactBar isOwn={isOwn} onPick={(emoji) => toggleReaction(message.id, emoji)} />
+                                        <div
+                                            className={`px-3 py-2.5 text-sm leading-relaxed shadow-sm break-words ${
+                                                isOwn
+                                                    ? 'bg-[#4C3AED] text-white rounded-2xl rounded-br-md'
+                                                    : 'bg-[#1F1F2B] text-[#E8E6F0] rounded-2xl rounded-bl-md border border-white/5'
+                                            } ${message.messageType === 'IMAGE' ? 'p-1.5' : ''}`}
+                                        >
+                                            <MessageBody message={message} isOwn={isOwn} />
+                                        </div>
+                                    </div>
+                                    <ReactionChips message={message} currentUser={currentUser} onToggle={toggleReaction} />
+                                    <span className="text-[10px] text-[#5F5D6E] mt-1 px-1 flex items-center">
+                                        {timeAgo(message.timeStamp)}
+                                        <SeenTicks message={message} currentUser={currentUser} />
+                                    </span>
                                 </div>
-                                <span className="text-[10px] text-[#5F5D6E] mt-1 px-1">
-                                    {timeAgo(message.timeStamp)}
-                                </span>
                             </div>
-                        </div>
+                        </React.Fragment>
                     );
                 })}
             </main>
+
+            {/* Typing indicator */}
+            {typingUsers.length > 0 && (
+                <div className="px-4 sm:px-8 pb-1 text-xs text-[#8B899C] italic">
+                    {typingUsers.length === 1
+                        ? `${typingUsers[0]} is typing...`
+                        : `${typingUsers.join(', ')} are typing...`}
+                </div>
+            )}
 
             {/* Message Input */}
             <div className="px-4 sm:px-8 py-4 bg-[#181822] border-t border-white/5">
@@ -512,8 +744,9 @@ function ChatPage() {
                             type="text"
                             placeholder={pendingFile ? "Add a caption (optional)..." : "Message the room..."}
                             value={input}
-                            onChange={(e) => setInput(e.target.value)}
+                            onChange={handleInputChange}
                             onKeyDown={handleKeyDown}
+                            onBlur={stopTypingNow}
                             className="flex-1 bg-transparent text-sm text-[#E8E6F0] placeholder-[#5F5D6E] focus:outline-none py-1.5"
                         />
                         <button
