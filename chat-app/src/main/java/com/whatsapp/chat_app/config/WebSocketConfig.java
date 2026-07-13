@@ -21,7 +21,8 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
         registry.addEndpoint("/chat")
                 .setAllowedOrigins(
                         "http://localhost:5173",
-                        "http://127.0.0.1:5173")
+                        "http://127.0.0.1:5173",
+                        "https://involved-novel-absolute-behalf.trycloudflare.com")
                 .withSockJS();
     }
 }

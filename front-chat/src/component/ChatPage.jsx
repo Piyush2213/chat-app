@@ -104,7 +104,10 @@ function SeenTicks({ message, currentUser }) {
     );
 }
 
-function QuickReactBar({ isOwn, onPick }) {
+// Single combined hover toolbar: quick-react emojis, then a divider, then
+// edit/delete -- all in one floating pill, WhatsApp/Discord/Slack style.
+function MessageToolbar({ isOwn, canEdit, canDelete, onReact, onEdit, onDelete }) {
+    const hasActions = canEdit || canDelete;
     return (
         <div
             className={`hidden group-hover:flex items-center gap-1 absolute -top-4 ${
@@ -114,27 +117,16 @@ function QuickReactBar({ isOwn, onPick }) {
             {QUICK_EMOJIS.map((emoji) => (
                 <button
                     key={emoji}
-                    onClick={() => onPick(emoji)}
-                    className="text-sm leading-none hover:scale-125 transition-transform"
+                    onClick={() => onReact(emoji)}
+                    className="text-sm leading-none hover:scale-125 transition-transform px-0.5"
                     aria-label={`React with ${emoji}`}
                 >
                     {emoji}
                 </button>
             ))}
-        </div>
-    );
-}
 
-// Edit/delete controls, shown on hover for messages the current user is
-// allowed to act on.
-function MessageActions({ canEdit, canDelete, isOwn, onEdit, onDelete }) {
-    if (!canEdit && !canDelete) return null;
-    return (
-        <div
-            className={`hidden group-hover:flex items-center gap-1 absolute -top-4 ${
-                isOwn ? 'left-0' : 'right-0'
-            } bg-[#1F1F2B] border border-white/10 rounded-full px-1.5 py-1 shadow-lg z-10`}
-        >
+            {hasActions && <span className="w-px h-4 bg-white/10 mx-0.5" />}
+
             {canEdit && (
                 <button onClick={onEdit} className="text-[#8B899C] hover:text-[#E8E6F0] p-0.5" aria-label="Edit message">
                     <MdEdit style={{ fontSize: 14 }} />
@@ -846,15 +838,15 @@ function ChatPage() {
                                     ) : (
                                         <div className="group relative">
                                             {!message.deleted && (
-                                                <QuickReactBar isOwn={isOwn} onPick={(emoji) => toggleReaction(message.id, emoji)} />
+                                                <MessageToolbar
+                                                    isOwn={isOwn}
+                                                    canEdit={canEdit}
+                                                    canDelete={canDelete}
+                                                    onReact={(emoji) => toggleReaction(message.id, emoji)}
+                                                    onEdit={() => startEdit(message)}
+                                                    onDelete={() => deleteMessage(message.id)}
+                                                />
                                             )}
-                                            <MessageActions
-                                                canEdit={canEdit}
-                                                canDelete={canDelete}
-                                                isOwn={isOwn}
-                                                onEdit={() => startEdit(message)}
-                                                onDelete={() => deleteMessage(message.id)}
-                                            />
                                             <div
                                                 className={`px-3 py-2.5 text-sm leading-relaxed shadow-sm break-words ${
                                                     isOwn

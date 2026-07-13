@@ -19,7 +19,7 @@ public class StaticResourceConfig implements WebMvcConfigurer {
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/uploads/**")
-                .allowedOrigins("http://localhost:5173", "http://127.0.0.1:5173", "http://3.111.225.244:5173")
+                .allowedOrigins("http://localhost:5173", "http://127.0.0.1:5173", "http://3.111.225.244:5173", "https://involved-novel-absolute-behalf.trycloudflare.com")
                 .allowedMethods("GET");
     }
 }

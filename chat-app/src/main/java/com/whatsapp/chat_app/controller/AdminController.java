@@ -22,11 +22,7 @@ import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/v1/admin")
-@CrossOrigin(
-        origins = {"http://localhost:5173", "http://127.0.0.1:5173", "http://3.111.225.244:5173"},
-        allowedHeaders = "*",
-        methods = {RequestMethod.GET, RequestMethod.POST, RequestMethod.PUT, RequestMethod.DELETE}
-)
+@CrossOrigin(origins = {"http://3.111.225.244:5173", "https://involved-novel-absolute-behalf.trycloudflare.com"}, allowedHeaders = "*", methods = {RequestMethod.GET, RequestMethod.POST, RequestMethod.PUT, RequestMethod.DELETE})
 public class AdminController {
 
     @Autowired
